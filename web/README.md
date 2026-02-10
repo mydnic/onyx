@@ -61,14 +61,13 @@ Bring up the entire application.
 
 0. Install playwright dependencies
 
-```cd web
+```bash
 npx playwright install
 ```
 
 1. Run playwright
 
 ```
-cd web
 npx playwright test
 ```
 
@@ -86,10 +85,22 @@ npx playwright test --ui
 npx playwright test --headed
 ```
 
-2. Inspect results
+3. Inspect results
 
 By default, playwright.config.ts is configured to output the results to:
 
 ```
 web/test-results
+```
+
+4. Visual regression screenshots
+
+Screenshots are captured automatically during test runs when `VISUAL_REGRESSION=true` is set.
+Baselines are stored in `web/tests/e2e/__screenshots__/` and can be updated with
+`npx playwright test --update-snapshots`.
+
+To compare screenshots across CI runs, use:
+
+```
+ods playwright-diff compare --run-id <CI_RUN_ID>
 ```
