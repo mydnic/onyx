@@ -75,6 +75,9 @@ from onyx.server.features.build.sandbox.kubernetes.internal.acp_exec_client impo
     SSEKeepalive,
 )
 from onyx.server.features.build.sandbox.models import LLMProviderConfig
+from onyx.server.features.build.sandbox.tasks.tasks import (
+    _get_disabled_user_library_paths,
+)
 from onyx.server.features.build.session.prompts import BUILD_NAMING_SYSTEM_PROMPT
 from onyx.server.features.build.session.prompts import BUILD_NAMING_USER_PROMPT
 from onyx.server.features.build.session.prompts import (
@@ -567,10 +570,6 @@ class SessionManager:
         # Only query if not using demo data (user library only applies to user files)
         excluded_user_library_paths: list[str] | None = None
         if not demo_data_enabled:
-            from onyx.server.features.build.sandbox.tasks.tasks import (
-                _get_disabled_user_library_paths,
-            )
-
             excluded_user_library_paths = _get_disabled_user_library_paths(
                 self._db_session, str(user_id)
             )

@@ -1206,9 +1206,12 @@ ln -sf {symlink_target} {session_path}/files
             # Use newline-delimited exclusion list written via heredoc to avoid
             # shell injection from path names. Paths are also pre-sanitized by
             # _sanitize_path() which enforces an alphanumeric whitelist.
+            # The heredoc delimiter is randomized to prevent a filename from
+            # accidentally terminating the heredoc early.
             excluded_paths_lines = "\n".join(
                 p.lstrip("/") for p in excluded_user_library_paths
             )
+            heredoc_delim = f"_EXCL_{uuid4().hex[:12]}_"
             files_symlink_setup = f"""
 # Create filtered files directory with exclusions
 mkdir -p {session_path}/files
@@ -1224,9 +1227,9 @@ done
 
 # Write excluded paths to a temp file (one per line, via heredoc for safety)
 EXCL_FILE=$(mktemp)
-cat > "$EXCL_FILE" << '__EXCL_EOF__'
+cat > "$EXCL_FILE" << '{heredoc_delim}'
 {excluded_paths_lines}
-__EXCL_EOF__
+{heredoc_delim}
 
 # Check if a relative path is excluded (exact match or child of excluded dir)
 is_excluded() {{

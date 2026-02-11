@@ -301,8 +301,9 @@ def _get_disabled_user_library_paths(db_session: "Session", user_id: str) -> lis
 
         # Extract file path from semantic_id
         # semantic_id format: "user_library/path/to/file.xlsx"
-        # Include both files AND directories - the shell script handles
-        # directory exclusion by checking if paths start with "excl/"
+        # Include both files AND directories - the shell script in
+        # setup_session_workspace() handles directory exclusion by
+        # checking if paths are children of an excluded directory.
         semantic_id = doc.semantic_id or ""
         if semantic_id.startswith("user_library"):
             file_path = semantic_id[len("user_library") :]
