@@ -8,9 +8,20 @@ Files are stored at:
 
 And synced to sandbox at:
     /workspace/files/user_library/{path}
+
+Known Issues / TODOs:
+    - Memory: Upload endpoints read entire file content into memory (up to 500MB).
+      Should be refactored to stream uploads directly to S3 via multipart upload
+      for better memory efficiency under concurrent load.
+    - Transaction safety: Multi-file uploads are not atomic. If the endpoint fails
+      mid-batch (e.g., file 3 of 5 exceeds storage quota), files 1-2 are already
+      persisted to S3 and DB. A partial upload is not catastrophic but the response
+      implies atomicity that doesn't exist.
 """
 
+import hashlib
 import mimetypes
+import re
 import zipfile
 from datetime import datetime
 from datetime import timezone
@@ -101,13 +112,19 @@ def _sanitize_path(path: str) -> str:
     """Sanitize a file path, removing traversal attempts and normalizing.
 
     Removes '..' and '.' segments and ensures the path starts with '/'.
-    Only allows alphanumeric characters, hyphens, underscores, dots, and
-    forward slashes in the final path segments.
+    Only allows alphanumeric characters, hyphens, underscores, dots, spaces,
+    and forward slashes. All other characters are stripped.
     """
     parts = path.split("/")
-    sanitized_parts = [p for p in parts if p and p != ".." and p != "."]
-    result = "/" + "/".join(sanitized_parts)
-    return result
+    sanitized_parts: list[str] = []
+    for p in parts:
+        if not p or p == ".." or p == ".":
+            continue
+        # Strip any character not in the whitelist
+        cleaned = re.sub(r"[^a-zA-Z0-9\-_. ]", "", p)
+        if cleaned:
+            sanitized_parts.append(cleaned)
+    return "/" + "/".join(sanitized_parts)
 
 
 def _build_document_id(user_id: str, path: str) -> str:
@@ -115,9 +132,12 @@ def _build_document_id(user_id: str, path: str) -> str:
 
     Deterministic: re-uploading the same file to the same path will produce the
     same document ID, allowing upsert to overwrite the previous record.
+
+    Uses a hash of the path to avoid collisions from separator replacement
+    (e.g., "/a/b_c" vs "/a_b/c" would collide with naive slash-to-underscore).
     """
-    sanitized_path = path.replace("/", "_").strip("_")
-    return f"CRAFT_FILE__{user_id}__{sanitized_path}"
+    path_hash = hashlib.sha256(path.encode()).hexdigest()[:16]
+    return f"CRAFT_FILE__{user_id}__{path_hash}"
 
 
 def _trigger_sandbox_sync(
@@ -141,21 +161,56 @@ def _trigger_sandbox_sync(
 def _get_user_storage_bytes(db_session: Session, user_id: UUID) -> int:
     """Get total storage usage for a user's library files.
 
-    Sums file_size from doc_metadata for all CRAFT_FILE documents owned by this user.
+    Uses SQL aggregation to sum file_size from doc_metadata JSONB for all
+    CRAFT_FILE documents owned by this user, avoiding loading all documents
+    into Python memory.
     """
-    from onyx.db.document import get_documents_by_source
+    from sqlalchemy import and_
+    from sqlalchemy import cast
+    from sqlalchemy import func
+    from sqlalchemy import Integer
+    from sqlalchemy import select
 
-    docs = get_documents_by_source(
-        db_session=db_session,
-        source=DocumentSource.CRAFT_FILE,
-        creator_id=user_id,
+    from onyx.db.models import Connector
+    from onyx.db.models import ConnectorCredentialPair
+    from onyx.db.models import Document as DbDocument
+    from onyx.db.models import DocumentByConnectorCredentialPair
+
+    stmt = (
+        select(
+            func.coalesce(
+                func.sum(
+                    cast(
+                        DbDocument.doc_metadata["file_size"].as_string(),
+                        Integer,
+                    )
+                ),
+                0,
+            )
+        )
+        .join(
+            DocumentByConnectorCredentialPair,
+            DbDocument.id == DocumentByConnectorCredentialPair.id,
+        )
+        .join(
+            ConnectorCredentialPair,
+            and_(
+                DocumentByConnectorCredentialPair.connector_id
+                == ConnectorCredentialPair.connector_id,
+                DocumentByConnectorCredentialPair.credential_id
+                == ConnectorCredentialPair.credential_id,
+            ),
+        )
+        .join(
+            Connector,
+            ConnectorCredentialPair.connector_id == Connector.id,
+        )
+        .where(Connector.source == DocumentSource.CRAFT_FILE)
+        .where(ConnectorCredentialPair.creator_id == user_id)
+        .where(DbDocument.doc_metadata["is_directory"].as_boolean().is_not(True))
     )
-    total = 0
-    for doc in docs:
-        metadata = doc.doc_metadata or {}
-        if not metadata.get("is_directory"):
-            total += metadata.get("file_size", 0)
-    return total
+    result = db_session.execute(stmt).scalar()
+    return int(result or 0)
 
 
 def _get_or_create_craft_connector(db_session: Session, user: User) -> tuple[int, int]:
@@ -200,12 +255,18 @@ def _get_or_create_craft_connector(db_session: Session, user: User) -> tuple[int
             return cc_pair.connector.id, cc_pair.credential.id
 
     # Check for orphaned connector (created but cc_pair creation failed previously)
+    # An orphaned connector has no cc_pairs. We check credentials to verify
+    # it belongs to this user (Connector doesn't have creator_id directly).
     existing_connectors = fetch_connectors(
         db_session, sources=[DocumentSource.CRAFT_FILE]
     )
     orphaned_connector = None
     for conn in existing_connectors:
-        if conn.name == "User Library":
+        if conn.name != "User Library":
+            continue
+        # Verify this connector has no cc_pairs (i.e., is actually orphaned)
+        # and that a matching credential exists for this user
+        if not conn.credentials:
             orphaned_connector = conn
             break
 
@@ -361,7 +422,9 @@ async def upload_files(
     base_path = _sanitize_path(path)
 
     for file in files:
-        # Read content
+        # TODO: Stream directly to S3 via multipart upload instead of reading
+        # entire file into memory. With 500MB max file size, this can OOM under
+        # concurrent uploads.
         content = await file.read()
         file_size = len(content)
 
@@ -497,6 +560,20 @@ async def upload_zip(
                 raise HTTPException(
                     status_code=400,
                     detail=f"Zip contains too many files. Maximum is {USER_LIBRARY_MAX_FILES_PER_UPLOAD}.",
+                )
+
+            # Zip bomb protection: check total decompressed size before extracting
+            declared_total = sum(
+                info.file_size for info in zip_file.infolist() if not info.is_dir()
+            )
+            max_decompressed = USER_LIBRARY_MAX_TOTAL_SIZE_BYTES
+            if existing_usage + declared_total > max_decompressed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Zip decompressed size ({declared_total // (1024*1024)}MB) "
+                        f"would exceed storage limit."
+                    ),
                 )
 
             for zip_info in zip_file.infolist():

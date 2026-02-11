@@ -9,7 +9,6 @@ import zipfile
 
 import requests
 
-from tests.integration.common_utils.managers.user import UserManager
 from tests.integration.common_utils.test_models import DATestUser
 
 API_SERVER_URL = "http://localhost:3000"
@@ -80,10 +79,10 @@ def _delete_file(user: DATestUser, document_id: str) -> None:
     response.raise_for_status()
 
 
-def test_user_library_upload_file(reset: None) -> None:  # noqa: ARG001
+def test_user_library_upload_file(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test uploading a single file to the user library."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
-
     # Upload a simple CSV file
     csv_content = b"name,value\nfoo,1\nbar,2"
     result = _upload_files(admin_user, "/", [("data.csv", csv_content)])
@@ -98,10 +97,10 @@ def test_user_library_upload_file(reset: None) -> None:  # noqa: ARG001
     assert any(entry["name"] == "data.csv" for entry in tree)
 
 
-def test_user_library_upload_to_directory(reset: None) -> None:  # noqa: ARG001
+def test_user_library_upload_to_directory(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test uploading files to a specific directory path."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
-
     # Create a directory first
     _create_directory(admin_user, "reports")
 
@@ -113,10 +112,10 @@ def test_user_library_upload_to_directory(reset: None) -> None:  # noqa: ARG001
     assert result["entries"][0]["path"] == "/reports/quarterly.xlsx"
 
 
-def test_user_library_upload_zip(reset: None) -> None:  # noqa: ARG001
+def test_user_library_upload_zip(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test uploading and extracting a zip file."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
-
     # Create an in-memory zip file
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -132,10 +131,10 @@ def test_user_library_upload_zip(reset: None) -> None:  # noqa: ARG001
     assert len(result["entries"]) >= 3
 
 
-def test_user_library_create_directory(reset: None) -> None:  # noqa: ARG001
+def test_user_library_create_directory(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test creating a directory."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
-
     result = _create_directory(admin_user, "my-data")
 
     assert result["is_directory"] is True
@@ -146,10 +145,10 @@ def test_user_library_create_directory(reset: None) -> None:  # noqa: ARG001
     assert any(entry["name"] == "my-data" for entry in tree)
 
 
-def test_user_library_toggle_sync(reset: None) -> None:  # noqa: ARG001
+def test_user_library_toggle_sync(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test toggling sync status for a file."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
-
     # Upload a file
     result = _upload_files(admin_user, "/", [("test.txt", b"hello")])
     document_id = result["entries"][0]["id"]
@@ -167,10 +166,10 @@ def test_user_library_toggle_sync(reset: None) -> None:  # noqa: ARG001
     assert entry["sync_enabled"] is False
 
 
-def test_user_library_delete_file(reset: None) -> None:  # noqa: ARG001
+def test_user_library_delete_file(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test deleting a file."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
-
     # Upload a file
     result = _upload_files(admin_user, "/", [("delete-me.txt", b"temp")])
     document_id = result["entries"][0]["id"]
@@ -183,9 +182,12 @@ def test_user_library_delete_file(reset: None) -> None:  # noqa: ARG001
     assert not any(entry["id"] == document_id for entry in tree)
 
 
-def test_user_library_isolation_between_users(reset: None) -> None:  # noqa: ARG001
+def test_user_library_isolation_between_users(
+    reset: None, admin_user: DATestUser  # noqa: ARG001
+) -> None:
     """Test that users can only see their own files."""
-    admin_user: DATestUser = UserManager.create(name="admin_user")
+    from tests.integration.common_utils.managers.user import UserManager
+
     other_user: DATestUser = UserManager.create(name="other_user")
 
     # Admin uploads a file

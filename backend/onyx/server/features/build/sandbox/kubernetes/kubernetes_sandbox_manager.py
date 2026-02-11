@@ -1202,7 +1202,11 @@ ln -sf {symlink_target} {session_path}/files
             # User files with exclusions: create filtered symlink structure
             # Instead of symlinking to /workspace/files directly, create a directory
             # with symlinks to each top-level item, then filter user_library contents
-            excluded_paths_str = " ".join(
+            #
+            # Use newline-delimited exclusion list written via heredoc to avoid
+            # shell injection from path names. Paths are also pre-sanitized by
+            # _sanitize_path() which enforces an alphanumeric whitelist.
+            excluded_paths_lines = "\n".join(
                 p.lstrip("/") for p in excluded_user_library_paths
             )
             files_symlink_setup = f"""
@@ -1218,8 +1222,26 @@ for item in /workspace/files/*; do
     fi
 done
 
-# Excluded paths (space-separated)
-EXCLUDED_PATHS="{excluded_paths_str}"
+# Write excluded paths to a temp file (one per line, via heredoc for safety)
+EXCL_FILE=$(mktemp)
+cat > "$EXCL_FILE" << '__EXCL_EOF__'
+{excluded_paths_lines}
+__EXCL_EOF__
+
+# Check if a relative path is excluded (exact match or child of excluded dir)
+is_excluded() {{
+    local rel_path="$1"
+    while IFS= read -r excl || [ -n "$excl" ]; do
+        [ -z "$excl" ] && continue
+        if [ "$rel_path" = "$excl" ]; then
+            return 0
+        fi
+        case "$rel_path" in
+            "$excl"/*) return 0 ;;
+        esac
+    done < "$EXCL_FILE"
+    return 1
+}}
 
 # Recursively create symlinks for non-excluded files
 create_filtered_symlinks() {{
@@ -1236,19 +1258,7 @@ create_filtered_symlinks() {{
             rel_path="$name"
         fi
 
-        # Check if this path is excluded
-        excluded=0
-        for excl in $EXCLUDED_PATHS; do
-            if [ "$rel_path" = "$excl" ]; then
-                excluded=1
-                break
-            fi
-            case "$rel_path" in
-                "$excl"/*) excluded=1; break ;;
-            esac
-        done
-
-        if [ $excluded -eq 1 ]; then
+        if is_excluded "$rel_path"; then
             continue
         fi
 
@@ -1267,6 +1277,8 @@ if [ -d "/workspace/files/user_library" ]; then
     create_filtered_symlinks /workspace/files/user_library {session_path}/files/user_library ""
     rmdir {session_path}/files/user_library 2>/dev/null || true
 fi
+
+rm -f "$EXCL_FILE"
 """
         else:
             # Normal mode: symlink to user's S3-synced knowledge files
@@ -2081,9 +2093,9 @@ echo "Session config regeneration complete"
 
         This is safe to call multiple times - s5cmd sync is idempotent.
 
-        Note: For user_library source, --delete is NOT used to preserve all
-        user files. Session visibility is controlled via filtered symlinks
-        in setup_session_workspace(), not during sync.
+        Note: For user_library source, --delete is NOT used since deletions
+        are handled explicitly by the delete_file API endpoint. File visibility
+        in sessions is controlled via filtered symlinks in setup_session_workspace().
 
         Args:
             sandbox_id: The sandbox UUID
@@ -2091,8 +2103,7 @@ echo "Session config regeneration complete"
             tenant_id: The tenant ID (for S3 path construction)
             source: Optional source type (e.g., "gmail", "google_drive").
                     If None, syncs all sources. If specified, only syncs
-                    that source's directory. For user_library, --delete
-                    is disabled to preserve toggled-off files.
+                    that source's directory.
 
         Returns:
             True if sync was successful, False otherwise.

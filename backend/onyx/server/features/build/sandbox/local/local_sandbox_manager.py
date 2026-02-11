@@ -1191,17 +1191,14 @@ class LocalSandboxManager(SandboxManager):
         """No-op for local mode - files are directly accessible via symlink.
 
         In local mode, the sandbox's files/ directory is a symlink to the
-        local persistent document storage, so no sync is needed.
-
-        Note: exclude_paths is not implemented for local mode since files are
-        accessed via symlink. All files in the storage directory are visible.
+        local persistent document storage, so no sync is needed. File visibility
+        in sessions is controlled via filtered symlinks in setup_session_workspace().
 
         Args:
             sandbox_id: The sandbox UUID (unused)
             user_id: The user ID (unused)
             tenant_id: The tenant ID (unused)
             source: The source type (unused in local mode)
-            exclude_paths: Paths to exclude (not implemented for local mode)
 
         Returns:
             True (always succeeds since no sync is needed)

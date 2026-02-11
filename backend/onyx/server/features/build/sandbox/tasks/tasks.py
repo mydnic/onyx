@@ -334,8 +334,9 @@ def sync_sandbox_files(
     Per-user locking ensures only one sync runs at a time for a given user.
     If a sync is already in progress, this task will wait until it completes.
 
-    For user_library source, files with sync_disabled=True in their metadata
-    are excluded from the sync and deleted from the sandbox if present.
+    Note: File visibility in sessions is controlled via filtered symlinks in
+    setup_session_workspace(), not at the sync level. The sync mirrors S3
+    faithfully; disabled files are excluded only when creating new sessions.
 
     Args:
         user_id: The user ID whose sandbox should be synced
@@ -378,15 +379,6 @@ def sync_sandbox_files(
                     f"skipping sync"
                 )
                 return False
-
-            # For user_library source, get list of disabled files to exclude
-            exclude_paths: list[str] | None = None
-            if source == "user_library":
-                exclude_paths = _get_disabled_user_library_paths(db_session, user_id)
-                if exclude_paths:
-                    task_logger.info(
-                        f"Excluding {len(exclude_paths)} disabled files from user_library sync"
-                    )
 
             sandbox_manager = get_sandbox_manager()
             result = sandbox_manager.sync_files(

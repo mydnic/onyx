@@ -427,7 +427,9 @@ class SandboxManager(ABC):
         For Kubernetes backend: Executes `s5cmd sync` in the file-sync sidecar container.
         For Local backend: No-op since files are directly accessible via symlink.
 
-        This is idempotent - only downloads changed files.
+        This is idempotent - only downloads changed files. File visibility in
+        sessions is controlled via filtered symlinks in setup_session_workspace(),
+        not at the sync level.
 
         Args:
             sandbox_id: The sandbox UUID
@@ -436,9 +438,6 @@ class SandboxManager(ABC):
             source: Optional source type (e.g., "gmail", "google_drive").
                     If None, syncs all sources. If specified, only syncs
                     that source's directory.
-            exclude_paths: Optional list of relative paths to exclude from sync
-                          (e.g., ["/data/file.xlsx"]). Files matching these paths
-                          will be skipped during sync and deleted from sandbox if present.
 
         Returns:
             True if sync was successful, False otherwise.
